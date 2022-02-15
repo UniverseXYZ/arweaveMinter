@@ -7,6 +7,7 @@ const csv = require('csv-parser')
 const log = require('ololog').configure({ time: true })
 const Arweave = require('arweave');
 const fetch = require('node-fetch');
+const path = require('path');
 
 const arweave = Arweave.init({
   host: 'arweave.net',// Hostname or IP address for a Arweave host
@@ -42,6 +43,95 @@ const getCurrentGasPrices = async () => {
   return prices
 }
 
+const walk = function(dir, done) {
+  var results = [];
+  fs.readdir(dir, function(err, list) {
+    if (err) return done(err);
+    var i = 0;
+    (function next() {
+      var file = list[i++];
+      if (!file) return done(null, results);
+      file = path.resolve(dir, file);
+      fs.stat(file, function(err, stat) {
+        if (stat && stat.isDirectory()) {
+          walk(file, function(err, res) {
+            results = results.concat(res);
+            next();
+          });
+        } else {
+          results.push(file);
+          next();
+        }
+      });
+    })();
+  });
+};
+
+walk('./Polymorphs', async (err, results) => {
+  console.log(results);
+  const assets = {
+    Characters: [],
+    Traits: {
+      Backgrounds: [],
+      Eyewear: [],
+      Footwear: [],
+      Headwear: [],
+      Lefthandaccessory: [],
+      Righthandaccessory: [],
+      Pants: [],
+      Torso: []
+    }
+  };
+
+  let rawdata = await fs.readFileSync('./arweave.json');
+  let wallet = JSON.parse(rawdata);
+
+  for (const asset of results) {
+    const file = await fs.readFileSync(asset);
+    const names = asset.replace('/home/illestrater/Development/polymorphMinter/Polymorphs','').replace(/\s+/g, '').split('/');
+    names.shift();
+
+    let transaction = await arweave.createTransaction({ data: file }, wallet);
+    transaction.addTag('Content-Type', 'image/png');
+  
+    await arweave.transactions.sign(transaction, wallet);
+  
+    let uploader = await arweave.transactions.getUploader(transaction);
+  
+    while (!uploader.isComplete) {
+      await uploader.uploadChunk();
+      console.log(`${uploader.pctComplete}% complete, ${uploader.uploadedChunks}/${uploader.totalChunks}`);
+    }
+
+    if (names[0] === 'Characters') {
+      assets[names[0]].push({
+        name: names[1],
+        permalink: `https://arweave.net/${ transaction.id }`
+      })
+    } else if (names[0] === 'Traits') {
+      assets[names[0]][names[1]].push({
+        name: names[2],
+        permalink: `https://arweave.net/${ transaction.id }`
+      })
+    }
+  
+    console.log('JSON UPDATED', `https://arweave.net/${ transaction.id }`, assets);
+  }
+
+  let metadataTx = await arweave.createTransaction({ data: Buffer.from(JSON.stringify(assets)) }, wallet);
+  metadataTx.addTag('Content-Type', 'application/json');
+
+  await arweave.transactions.sign(metadataTx, wallet);
+
+  let metadataUploader = await arweave.transactions.getUploader(metadataTx);
+
+  while (!metadataUploader.isComplete) {
+    await metadataUploader.uploadChunk();
+    console.log(`${metadataUploader.pctComplete}% complete, ${metadataUploader.uploadedChunks}/${metadataUploader.totalChunks}`);
+  }
+
+  console.log('FINAL HASH', metadataTx.id);
+})
 
 const main = async () => {
   let myBalanceWei = await web3.eth.getBalance(web3.eth.defaultAccount).then(balance => balance)
@@ -217,4 +307,4 @@ const main = async () => {
   });
 }
  
-main()
+// main()
